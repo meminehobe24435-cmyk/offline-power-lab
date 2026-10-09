@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# tooling
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# generated outputs of the tool itself
+results/
+out/
+*.csv
+*.md.bak
+
+# editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
