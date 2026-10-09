@@ -16,25 +16,32 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         python: ["3.10", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "${{ matrix.python }}"
 
       # No `| head` and no bare pipes anywhere: every command writes to a file
       # first and the file is printed afterwards, so a broken pipe can never turn
       # a real failure into a SIGPIPE success (or hide a non-zero exit code).
+      # `set +e` around each call because GitHub runs these steps with `bash -e`,
+      # which would abort the script before the exit code could be inspected -
+      # and then the log would never be printed.
       - name: Self-check suite
         run: |
+          set +e
           python test/test_all.py > test_output.txt 2>&1
           rc=$?
+          set -e
           cat test_output.txt
           exit $rc
 
       - name: Demo - default part set (documented to fail several checks)
         run: |
+          set +e
           python main.py all --out results > demo_default.txt 2>&1
           rc=$?
+          set -e
           cat demo_default.txt
           # exit code 1 is the CONTRACT for this run: the screened part set trips
           # four derating rules, the gain-margin target and the DM target.
@@ -45,8 +52,10 @@ jobs:
 
       - name: Demo - corrected reference design (must pass everything)
         run: |
+          set +e
           python demo_corrected.py --out out > demo_corrected.txt 2>&1
           rc=$?
+          set -e
           cat demo_corrected.txt
           exit $rc
 
@@ -75,8 +84,8 @@ jobs:
     name: strict (warnings as errors, compile, API surface)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
