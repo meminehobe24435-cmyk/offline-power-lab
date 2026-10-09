@@ -285,13 +285,19 @@ def capacitor_stress(
     cout_irms = math.sqrt(rms2) if rms2 > 0 else 0.0
     cout_esr_total = comp.cout_esr
     cout_esr_loss = cout_irms ** 2 * cout_esr_total
-    cout_core_c = comp.ambient_c + cout_esr_loss * comp.cout_rth_c_per_w
+    # The bank shares the ripple current: each of the ``cout_n`` capacitors in
+    # parallel burns 1/cout_n of the ESR loss and has its own thermal resistance,
+    # so the temperature rise of the bank is (P_total/cout_n)*Rth_1cap.
+    n_par = max(1, int(comp.cout_n))
+    cout_core_c = comp.ambient_c + (cout_esr_loss / n_par) * comp.cout_rth_c_per_w
     cout_life_h = cap_life_hours(
         comp.cout_life_h, comp.cout_life_temp_c, cout_core_c
     )
     # the bulk cap is rated for the same endurance class in this tool
     cin_life_h = cap_life_hours(
-        comp.cout_life_h, comp.cout_life_temp_c, comp.ambient_c + cin_esr_loss * comp.cout_rth_c_per_w
+        comp.cout_life_h,
+        comp.cout_life_temp_c,
+        comp.ambient_c + cin_esr_loss * comp.cout_rth_c_per_w,
     )
     return {
         "cin_vdc": cin_vdc,
@@ -302,6 +308,7 @@ def capacitor_stress(
         "cout_vdc": cout_vdc,
         "cout_irms": cout_irms,
         "cout_esr_loss": cout_esr_loss,
+        "cout_esr_loss_per_cap": cout_esr_loss / n_par,
         "cout_core_c": cout_core_c,
         "cout_life_h": cout_life_h,
         "cout_ripple_rated_total": comp.cout_ripple_rated * comp.cout_n,

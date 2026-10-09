@@ -427,6 +427,7 @@ def _resolve_turns(
     core: CoreSpec,
     bmax_target: float,
     max_iter: int = 200,
+    ur: float = 2000.0,
 ) -> Tuple[int, int, float, float, float, float, float]:
     """Pick integer turns, then re-solve the *actual* operating point.
 
@@ -439,6 +440,12 @@ def _resolve_turns(
         Ipk  = Pin/(Vin_min*D) + dI/2      (exact trapezoid power balance)
         kr   = dI/Ipk
 
+    There is also a hard floor on the turn count that comes from the air gap:
+    an ungapped core can only reach ``L_max = mu0*Np^2*Ae*mu_r/le``, so if the
+    design inductance is above that the gap would have to be *negative* - which
+    is impossible.  The turns are therefore raised to
+    ``Np >= sqrt(Lp*le/(mu0*Ae*mu_r))``, which also lowers Bmax (a bonus).
+
     Returns ``(np, ns, n_actual, vor, dmax, ipk, krip)``.
     """
     lp = design.lp
@@ -447,9 +454,14 @@ def _resolve_turns(
     fsw = design.spec.fsw
     vout_ref = design.spec.vout_ref
     ae_m2 = core.ae_cm2 * 1e-4
+    le_m = core.le_cm * 1e-2
+    # minimum turns for which a non-negative gap exists
+    np_gap_min = int(math.ceil(math.sqrt(lp * le_m / (MU0 * ae_m2 * ur)) * 1.02)) + 1
 
     np = max(1, int(math.ceil(lp * design.ipk / (bmax_target * ae_m2) - 1e-12)))
     for _ in range(max_iter):
+        if np < np_gap_min:
+            np = np_gap_min
         ns = max(1, int(math.ceil(np / design.n - 1e-12)))
         n_act = float(np) / float(ns)
         vor = n_act * vout_ref
@@ -546,7 +558,9 @@ def design_magnetics(
     chosen: Optional[MagneticDesign] = None
     last_reason = ""
     for core in candidates:
-        np, ns, n_actual, vor, dmax, ipk, krip = _resolve_turns(design, core, bmax_target)
+        np, ns, n_actual, vor, dmax, ipk, krip = _resolve_turns(
+            design, core, bmax_target, ur=ur
+        )
         bmax = bmax_of(design.lp, ipk, np, core.ae_cm2)
         if bmax > bmax_target * (1.0 + 1e-9):
             last_reason = "{0}: Bmax={1:.4f} T above target".format(core.name, bmax)

@@ -1,0 +1,114 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }} / python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "${{ matrix.python }}"
+
+      # No `| head` and no bare pipes anywhere: every command writes to a file
+      # first and the file is printed afterwards, so a broken pipe can never turn
+      # a real failure into a SIGPIPE success (or hide a non-zero exit code).
+      - name: Self-check suite
+        run: |
+          python test/test_all.py > test_output.txt 2>&1
+          rc=$?
+          cat test_output.txt
+          exit $rc
+
+      - name: Demo - default part set (documented to fail several checks)
+        run: |
+          python main.py all --out results > demo_default.txt 2>&1
+          rc=$?
+          cat demo_default.txt
+          # exit code 1 is the CONTRACT for this run: the screened part set trips
+          # four derating rules, the gain-margin target and the DM target.
+          if [ "$rc" -ne 1 ]; then
+            echo "expected exit code 1 from the default demo, got $rc"
+            exit 1
+          fi
+
+      - name: Demo - corrected reference design (must pass everything)
+        run: |
+          python demo_corrected.py --out out > demo_corrected.txt 2>&1
+          rc=$?
+          cat demo_corrected.txt
+          exit $rc
+
+      - name: Check the generated report exists and is not empty
+        run: |
+          ls -l results out
+          test -s results/opl_report.md
+          test -s results/opl_summary.csv
+          test -s results/opl_stress.csv
+          test -s results/opl_loop.csv
+          test -s results/opl_emi.csv
+          test -s results/opl_losses.csv
+          test -s out/corrected_report.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: design-output-${{ matrix.os }}-${{ matrix.python }}
+          path: |
+            test_output.txt
+            demo_default.txt
+            demo_corrected.txt
+            results/
+            out/
+
+  strict:
+    name: strict (warnings as errors, compile, API surface)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Byte-compile everything
+        run: python -m compileall -q opl test main.py demo_corrected.py
+
+      - name: Run the pipeline with warnings turned into errors
+        run: |
+          python -W error -c "
+          import opl
+          res = opl.run_spec(opl.EXAMPLE_SPECS['default'])
+          print('ok dmax=%.4f efficiency=%.4f' % (res.flyback.dmax, res.budget.efficiency))
+          "
+
+      - name: The public API declared in opl.__all__ must really exist
+        run: |
+          python -c "
+          import opl
+          missing = [name for name in opl.__all__ if not hasattr(opl, name)]
+          print('declared:', len(opl.__all__), 'missing:', missing)
+          raise SystemExit(1 if missing else 0)
+          "
+
+      - name: Documented quantities must match the code (spot check)
+        run: |
+          python -c "
+          import opl
+          spec = opl.DesignSpec(vac_min=90, vac_max=264, vout=5.0, iout=3.0, fsw=65e3)
+          d = opl.design_flyback(spec)
+          assert abs(d.dmax - 0.45) < 1e-12, d.dmax
+          assert abs(opl.verify_power_balance(d) - 1.0) < 1e-9
+          m = opl.design_magnetics(d)
+          assert m.bmax <= 0.28 * (1 + 1e-9), m.bmax
+          print('spot checks ok: dmax=%.4f Lp=%.6f H core=%s Bmax=%.4f T' % (d.dmax, d.lp, m.core.name, m.bmax))
+          "

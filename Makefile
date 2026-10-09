@@ -6,21 +6,25 @@
 PY ?= python
 OUT ?= results
 
-.PHONY: all help test demo design stress loop safety emi budget clean version
+.PHONY: all help test demo demo-corrected design stress loop safety emi budget clean version
 
 help:
-	@echo "make test     - run the full self-check suite (no third-party deps)"
-	@echo "make demo     - run the default design end to end and write $(OUT)/"
-	@echo "make design   - flyback main circuit only"
-	@echo "make clean    - remove generated output and __pycache__ directories"
+	@echo "make test            - run the full self-check suite (no third-party deps)"
+	@echo "make demo            - run the default design end to end and write $(OUT)/"
+	@echo "make demo-corrected  - run the corrected part set (passes every check)"
+	@echo "make design          - flyback main circuit only"
+	@echo "make clean           - remove generated output and __pycache__ directories"
 
-all: test demo
+all: test demo demo-corrected
 
 test:
 	$(PY) test/test_all.py
 
 demo:
 	$(PY) main.py all --out $(OUT)
+
+demo-corrected:
+	$(PY) demo_corrected.py --out $(OUT)
 
 design:
 	$(PY) main.py design

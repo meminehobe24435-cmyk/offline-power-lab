@@ -132,18 +132,25 @@ opl.magnetics
 opl.stress
 ----------
 ``derating_ratio(actual, rated) -> float`` [-].
-``mosfet_stress(design, comp: Components, temp_c=100.0) -> dict[str, float]``
+``mosfet_stress(design, comp: Components, temp_c=100.0, mag=None) -> dict[str, float]``
     keys: ``vds_ideal``, ``vds_spike``, ``vds_total``, ``id_pk``, ``id_rms``,
     ``rds_on_hot`` [ohm], ``p_cond``, ``p_sw_on``, ``p_sw_off``, ``p_coss``,
-    ``p_gate``, ``p_total`` [W].
+    ``p_gate``, ``p_total``, ``tj_est`` [W, degC].
 ``rectifier_stress(design, comp, temp_c=100.0) -> dict[str, float]``
-    keys: ``vr`` [V], ``if_pk``, ``if_avg``, ``if_rms`` [A], ``p_total`` [W].
+    keys: ``vr`` [V], ``if_pk``, ``if_avg``, ``if_rms`` [A], ``p_dc``, ``p_rs``,
+    ``p_total`` [W].
 ``capacitor_stress(design, comp, temp_c=100.0) -> dict[str, float]``
-    keys: ``cin_vdc`` [V], ``cin_irms`` [A], ``cin_ripple`` [-] ,
-    ``cout_vdc``, ``cout_irms`` [A], ``cout_ripple`` [-], ``cout_esr_loss`` [W],
-    ``cout_core_c``, ``cout_life_h`` [h].
+    keys: ``cin_vdc`` [V], ``cin_ripple_pp`` [V], ``cin_irms`` [A],
+    ``cin_esr_loss`` [W], ``cin_life_h`` [h], ``cout_vdc``, ``cout_irms`` [A],
+    ``cout_esr_loss``, ``cout_esr_loss_per_cap`` [W], ``cout_core_c`` [degC],
+    ``cout_life_h`` [h], ``cout_ripple_rated_total`` [A].
+``rds_on_hot(rds_on_25_ohm, temp_c) -> float`` [ohm]
+    ``Rds(25)*(1+0.010*(T-25))``.
+``cap_life_hours(life_rated_h, temp_rated_c, core_temp_c) -> float`` [h]
+    ``L_rated * 2^((T_rated - T_core)/10)``.
 ``clamp_stress(design, comp) -> dict[str, float]``
-    keys: ``llk`` [H], ``v_spike`` [V], ``v_clamp`` [V], ``p_clamp`` [W].
+    keys: ``llk`` [H], ``v_spike`` [V], ``v_clamp`` [V], ``energy_leak`` [J],
+    ``p_leak``, ``p_clamp`` [W], ``clamp_factor`` [-], ``clamp_tau`` [s].
 ``evaluate_stress(design, comp, mag=None, rules=DEFAULT_DERATING_RULES,
                   temp_c=100.0) -> StressReport``
     Builds the actual/rated/ratio/margin/pass table.  Never raises for a
@@ -158,23 +165,32 @@ opl.loop
 ``compensator_response(comp_net: Compensator, f_Hz) -> complex``.
 ``loop_response(power, comp_net, comp, f_Hz) -> complex``
     ``Gvd * (1/ctrl_vramp) * opto_gain/(1+s/wp_opto) * Hc``.
-``design_compensator(power, comp, design=None, fc_target_Hz=None,
-                     pm_target_deg=45.0, kind="II") -> Compensator``
-    Places the zero(s)/pole(s) and sets the gain for the target crossover;
-    raises ``OPL-E-UNSAT`` when no crossover inside the allowed window meets
-    the phase-margin target.
-``type2_components(design, power, comp, fc_Hz) -> dict[str, float]``
-    R1/R2 divider [ohm], C_zero/C_pole [F], R_LED [ohm] for the TL431+opto form.
-``sweep_response(func, f_start_Hz, f_stop_Hz, n_points) -> list[LoopPoint]``.
-``analytic_crossover(power, comp_net, comp, f_start_Hz=10.0,
-                     f_stop_Hz=1e6) -> float`` [Hz] asymptotic Bode estimate.
-``numeric_crossover(power, comp_net, comp, f_start_Hz=10.0,
-                    f_stop_Hz=1e6, n_points=4000) -> float`` [Hz] root find.
+``design_compensator(power, comp, design=None, fc_target_hz=None,
+                    pm_target_deg=45.0, kind="II", fc_min_hz=100.0) -> Compensator``
+    Places the zero at the crossover and the pole a decade above it, then solves
+    ``kc`` so that ``|T(fc)| = 1``; lowers ``fc`` by 30 % per attempt when the
+    phase-margin target is missed and raises ``OPL-E-UNSAT`` if even ``fc_min_hz``
+    cannot reach it.  An explicit ``fc_target_hz`` is honoured as-is.
+``type2_components(design, fc_hz, wz, wp, r_lower_ohm=10e3, vref=2.495,
+                   v_led_f=1.10, v_ka_min=2.50, r_led_ohm=1000.0) -> dict[str, float]``
+    TL431 + opto synthesis: ``R_upper = R_lower*(Vout/Vref-1)``,
+    ``C_zero = 1/(wz*R_upper)``, ``C_pole = 1/(wp*(R_upper||R_lower))`` and the
+    LED bias current in mA.  ``wz``/``wp`` in rad/s.
+``sweep_response(func, f_start_Hz, f_stop_Hz, n_points=400) -> list[LoopPoint]``
+    Log-spaced, with the phase unwrapped across the sweep.
+``analytic_crossover(power, comp_net, comp, f_start_Hz=10.0, f_stop_Hz=1e6,
+                     n_points=400) -> float`` [Hz]
+    First falling 0 dB crossing of the **asymptotic Bode magnitude** (exact value
+    at the breakpoints, textbook slopes in between, refined by a few exact
+    Newton steps).
+``numeric_crossover(power, comp_net, comp, f_start_Hz=10.0, f_stop_Hz=1e6,
+                    n_points=1200) -> float`` [Hz] bisection on the exact |T|.
 ``analyze_loop(power, comp_net, comp, design=None, f_start_Hz=10.0,
                f_stop_Hz=1e6, n_points=400, pm_target_deg=45.0,
                gm_target_db=10.0) -> LoopResult``
-    Reports crossover, phase margin, gain margin and the analytic-vs-numeric
-    crossover error in percent.
+    Reports crossover, phase margin, the worst gain margin among all -180 deg
+    crossings (``inf`` = no crossing in the swept range) and the
+    analytic-vs-numeric crossover error in percent.
 
 opl.safety
 ----------
@@ -192,34 +208,39 @@ opl.safety
 ``check_safety(design, design_clearance_mm, design_creepage_mm,
                v_working_rms_V=None, pollution_degree=2, material_group="IIIa",
                insulation="reinforced", altitude_m=2000.0, cy_f=1.0e-9,
-               equipment_class="II") -> SafetyResult``
+               cy_count=2, equipment_class="II") -> SafetyResult``
     Compares the look-up requirement with the layout numbers and the earth
-    leakage current with the class limit.
+    leakage current (``cy_count * cy_f``) with the class limit.
 
 opl.emi
 -------
 ``insertion_loss_lc(f_Hz, l_H, c_F, rs_ohm=50.0, rl_ohm=50.0) -> float`` [dB]
     CISPR 17 style 50 ohm / 50 ohm insertion loss of a series-L shunt-C filter.
+``filter_gain(f_Hz, l_H, c_F, rs_ohm=50.0, rl_ohm=50.0) -> complex``.
 ``insertion_loss_dm(f_Hz, filt: EmiFilter) -> float`` [dB].
 ``insertion_loss_cm(f_Hz, filt: EmiFilter) -> float`` [dB]
     Uses ``2*L_per_winding`` in the CM loop and one ``Cy`` as the shunt path
     (conservative convention, documented in the module).
 ``emi_report(filt, target_db=40.0, f_start_Hz=150e3, f_stop_Hz=30e6,
-             n_points=200, vac_V=264.0, f_line_Hz=50.0, cy_count=2,
-             equipment_class="II") -> EmiResult``
+             n_points=200, vac_v=264.0, f_line_Hz=50.0, cy_count=2,
+             equipment_class="II", design=None) -> EmiResult``
     Returns the DM/CM insertion-loss curves, the first frequency above which
     the target is met, and the Y-capacitor leakage current verdict.
 
 opl.budget
 ----------
-``steinmetz_pv(f_kHz, b_tesla, material="3C90-class") -> float`` [mW/cm^3]
+``steinmetz_pv(f_khz, b_tesla, material="3C90-class") -> float`` [mW/cm^3]
     ``k * f^alpha * B^beta``; raise ``OPL-E-TABLE`` for an unknown material.
 ``core_loss_w(design, mag, material=None) -> float`` [W] (uses ``delta_b``).
 ``copper_loss_w(design, mag, temp_c=100.0) -> float`` [W]
     DC + skin-effect AC term for both windings.
-``switch_losses(design, comp, temp_c=100.0) -> dict[str, float]`` [W].
+``switch_losses(design, comp, temp_c=100.0) -> dict[str, float]`` [W]
+    keys ``mosfet_cond``, ``mosfet_sw``, ``mosfet_coss``, ``mosfet_gate``,
+    ``mosfet_total``.
 ``rectifier_loss_w(design, comp, temp_c=100.0) -> float`` [W].
-``loss_budget(design, comp, mag, temp_c=100.0) -> LossBudget``
+``bridge_loss_w(design, comp=None) -> float`` [W] ``bridge_drop * Iin_avg``.
+``feedback_loss_w(design, comp) -> float`` [W] opto LED bias + divider.
+``loss_budget(design, comp, mag, temp_c=100.0, material=None) -> LossBudget``
     Itemised losses, total, predicted efficiency, gap to ``eta_target`` and the
     dominant loss term.
 
@@ -346,6 +367,8 @@ __all__ = [
     "copper_loss_w",
     "switch_losses",
     "rectifier_loss_w",
+    "bridge_loss_w",
+    "feedback_loss_w",
     "loss_budget",
     # report / pipeline / cli
     "render_markdown",
@@ -457,8 +480,10 @@ from .emi import (
     insertion_loss_lc,
 )
 from .budget import (
+    bridge_loss_w,
     core_loss_w,
     copper_loss_w,
+    feedback_loss_w,
     loss_budget,
     rectifier_loss_w,
     steinmetz_pv,

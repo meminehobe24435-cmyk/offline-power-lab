@@ -442,9 +442,13 @@ def run(chk) -> None:
     chk.close(caps["cin_irms"], math.sqrt(d.irms_pri ** 2 - d.iin_avg ** 2), 1e-9, "Icin_rms identity")
     chk.close(caps["cout_esr_loss"], caps["cout_irms"] ** 2 * c.cout_esr, 1e-12, "ESR loss")
     chk.close(
-        caps["cout_core_c"], c.ambient_c + caps["cout_esr_loss"] * c.cout_rth_c_per_w, 1e-12,
-        "core temperature model",
+        caps["cout_core_c"],
+        c.ambient_c + (caps["cout_esr_loss"] / c.cout_n) * c.cout_rth_c_per_w,
+        1e-12,
+        "core temperature model spreads the ripple over the parallel bank",
     )
+    chk.close(caps["cout_esr_loss_per_cap"], caps["cout_esr_loss"] / c.cout_n, 1e-12,
+              "per-capacitor ESR loss")
     chk.close(
         caps["cout_life_h"],
         cap_life_hours(c.cout_life_h, c.cout_life_temp_c, caps["cout_core_c"]),
